@@ -1,0 +1,199 @@
+name: SQL Schema Lint via MCP (Python)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '**.sql'
+      - '**.ddl'
+      - 'examples/rules/*.md'
+
+env:
+  MCP_SERVER_URL: ${{ secrets.MCP_SERVER_URL || 'http://localhost:8070' }}
+
+jobs:
+  lint-schema-mcp:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install MCP SDK
+      run: |
+        pip install mcp httpx
+
+    - name: Get changed SQL files
+      id: changed-files
+      uses: tj-actions/changed-files@v41
+      with:
+        files: |
+          **.sql
+          **.ddl
+
+    - name: Lint schemas using MCP
+      if: steps.changed-files.outputs.any_changed == 'true'
+      env:
+        MCP_API_KEY: ${{ secrets.MCP_API_KEY }}
+      run: |
+        cat > lint_with_mcp.py << 'EOF'
+        import os
+        import sys
+        import json
+        import httpx
+        from pathlib import Path
+
+        # Configuration
+        MCP_SERVER_URL = os.getenv('MCP_SERVER_URL', 'http://localhost:8070')
+        MCP_API_KEY = os.getenv('MCP_API_KEY', '')
+        CHANGED_FILES = os.getenv('CHANGED_FILES', '').split()
+
+        # Setup headers
+        headers = {
+            'Content-Type': 'application/json'
+        }
+        if MCP_API_KEY:
+            headers['Authorization'] = f'Bearer {MCP_API_KEY}'
+
+        def call_mcp(method, params=None, id=1):
+            """Make a JSON-RPC call to the MCP server"""
+            payload = {
+                'jsonrpc': '2.0',
+                'method': method,
+                'id': id
+            }
+            if params:
+                payload['params'] = params
+            
+            with httpx.Client() as client:
+                response = client.post(
+                    f'{MCP_SERVER_URL}/message',
+                    json=payload,
+                    headers=headers,
+                    timeout=30.0
+                )
+                response.raise_for_status()
+                return response.json()
+
+        def main():
+            has_errors = False
+            
+            # Initialize MCP session
+            print("Initializing MCP session...")
+            init_response = call_mcp('initialize', {
+                'protocolVersion': '0.1.0',
+                'clientInfo': {
+                    'name': 'github-actions',
+                    'version': '1.0.0'
+                }
+            })
+            print(f"Session initialized: {init_response}")
+            
+            # Read rules content
+            rules_path = Path('examples/rules/sql-schema-rules.md')
+            if not rules_path.exists():
+                print(f"Rules file not found: {rules_path}")
+                sys.exit(1)
+            
+            rules_content = rules_path.read_text()
+            
+            # Process each changed SQL file
+            for file_path in CHANGED_FILES:
+                if file_path.endswith(('.sql', '.ddl')):
+                    print(f"\n=== Linting {file_path} ===")
+                    
+                    try:
+                        # Read schema content
+                        schema_content = Path(file_path).read_text()
+                        
+                        # Call lint_schema tool
+                        lint_response = call_mcp('tools/call', {
+                            'name': 'lint_schema',
+                            'arguments': {
+                                'schema_context': schema_content,
+                                'rules_context': rules_content,
+                                'output_format': 'json'
+                            }
+                        }, id=2)
+                        
+                        if 'error' in lint_response:
+                            print(f"Error from MCP server: {lint_response['error']}")
+                            has_errors = True
+                            continue
+                        
+                        # Parse results
+                        result_text = lint_response['result']['content'][0]['text']
+                        result = json.loads(result_text)
+                        
+                        if result.get('totalIssues', 0) > 0:
+                            error_count = result.get('errorCount', 0)
+                            print(f"Found {result['totalIssues']} issues (Errors: {error_count})")
+                            
+                            for issue in result.get('issues', []):
+                                severity = issue['severity'].upper()
+                                print(f"\n[{severity}] Line {issue['line']}: {issue['rule']}")
+                                print(f"  {issue['message']}")
+                                if issue.get('suggestion'):
+                                    print(f"  Suggestion: {issue['suggestion']}")
+                            
+                            if error_count > 0:
+                                has_errors = True
+                        else:
+                            print("✓ No issues found")
+                    
+                    except Exception as e:
+                        print(f"Failed to lint {file_path}: {e}")
+                        has_errors = True
+            
+            # Exit with appropriate code
+            sys.exit(1 if has_errors else 0)
+
+        if __name__ == '__main__':
+            main()
+        EOF
+        
+        export CHANGED_FILES="${{ steps.changed-files.outputs.all_changed_files }}"
+        python lint_with_mcp.py
+
+    - name: Create PR comment with summary
+      if: always() && steps.changed-files.outputs.any_changed == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const { execSync } = require('child_process');
+          
+          // Check if the lint step failed
+          const lintFailed = '${{ job.status }}' === 'failure';
+          
+          let comment = lintFailed 
+            ? '## ❌ SQL Schema Lint Failed\n\n'
+            : '## ✅ SQL Schema Lint Passed\n\n';
+          
+          comment += 'The MCP server has analyzed the SQL schema changes in this PR.\n\n';
+          
+          if (lintFailed) {
+            comment += '### Issues Found\n';
+            comment += 'Please review the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for detailed error messages.\n\n';
+            comment += '### Next Steps\n';
+            comment += '1. Review the reported issues\n';
+            comment += '2. Fix the schema problems\n';
+            comment += '3. Push your changes to update this PR\n';
+          } else {
+            comment += 'All SQL schemas comply with the defined rules. Good job! 🎉\n';
+          }
+          
+          // Post comment
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
