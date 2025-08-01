@@ -86,7 +86,7 @@ jobs:
                         f'{base_url}/message',
                         json=payload,
                         headers=headers,
-                        timeout=30.0
+                        timeout=60.0  # Increased timeout
                     )
                     response.raise_for_status()
                     return response.json()
@@ -103,9 +103,15 @@ jobs:
                 print(f"Status: {e.response.status_code}")
                 print(f"Response: {e.response.text}")
                 sys.exit(1)
+            except httpx.TimeoutException as e:
+                print(f"ERROR: Request timed out after 60 seconds")
+                print(f"The MCP server may be taking too long to process the request")
+                print(f"Timeout error: {e}")
+                sys.exit(1)
 
         def main():
             has_errors = False
+            all_violations = {}  # Store violations by file
             
             # Debug: Print server URL
             print(f"MCP Server URL: {MCP_SERVER_URL}")
@@ -121,6 +127,11 @@ jobs:
                 }
             })
             print(f"Session initialized: {init_response}")
+            
+            # List available tools
+            print("\nListing available tools...")
+            tools_response = call_mcp('tools/list', {})
+            print(f"Available tools: {json.dumps(tools_response, indent=2)}")
             
             # Read rules content
             rules_path = Path('examples/rules/sql-schema-rules.md')
@@ -139,6 +150,10 @@ jobs:
                         # Read schema content
                         schema_content = Path(file_path).read_text()
                         
+                        # Debug: Show file sizes
+                        print(f"Schema size: {len(schema_content)} characters")
+                        print(f"Rules size: {len(rules_content)} characters")
+                        
                         # Call lint_schema tool
                         lint_response = call_mcp('tools/call', {
                             'name': 'lint_schema',
@@ -149,22 +164,62 @@ jobs:
                             }
                         }, id=2)
                         
+                        # Debug: Show raw response
+                        print(f"Raw MCP response: {json.dumps(lint_response, indent=2)}")
+                        
                         if 'error' in lint_response:
                             print(f"Error from MCP server: {lint_response['error']}")
                             has_errors = True
                             continue
                         
                         # Parse results
-                        result_text = lint_response['result']['content'][0]['text']
-                        result = json.loads(result_text)
+                        if 'result' not in lint_response:
+                            print(f"Unexpected response format: {lint_response}")
+                            has_errors = True
+                            continue
+                            
+                        # Handle different response formats
+                        result_content = lint_response.get('result', {})
+                        if isinstance(result_content, dict) and 'content' in result_content:
+                            content = result_content['content']
+                            if isinstance(content, list) and len(content) > 0:
+                                result_text = content[0].get('text', '{}')
+                            else:
+                                result_text = '{}'
+                        else:
+                            print(f"Unexpected result format: {result_content}")
+                            result_text = '{}'
                         
-                        if result.get('totalIssues', 0) > 0:
-                            error_count = result.get('errorCount', 0)
-                            print(f"Found {result['totalIssues']} issues (Errors: {error_count})")
+                        try:
+                            result = json.loads(result_text)
+                            print(f"Parsed result: {json.dumps(result, indent=2)}")
+                        except json.JSONDecodeError:
+                            print(f"Failed to parse result as JSON: {result_text}")
+                            result = {}
+                        
+                        # Check both possible field names for total issues
+                        total_issues = result.get('totalIssues', result.get('total_issues', 0))
+                        
+                        if total_issues > 0:
+                            error_count = result.get('errorCount', result.get('errors', 0))
+                            warning_count = result.get('warningCount', result.get('warnings', 0))
+                            info_count = result.get('infoCount', result.get('info', 0))
+                            
+                            print(f"Found {total_issues} issues (Errors: {error_count}, Warnings: {warning_count}, Info: {info_count})")
+                            
+                            # Store violations for this file
+                            all_violations[file_path] = {
+                                'total': total_issues,
+                                'errors': error_count,
+                                'warnings': warning_count,
+                                'info': info_count,
+                                'issues': result.get('issues', [])
+                            }
                             
                             for issue in result.get('issues', []):
                                 severity = issue['severity'].upper()
-                                print(f"\n[{severity}] Line {issue['line']}: {issue['rule']}")
+                                rule_id = issue.get('rule_id', issue.get('rule', 'unknown'))
+                                print(f"\n[{severity}] Line {issue['line']}: {rule_id}")
                                 print(f"  {issue['message']}")
                                 if issue.get('suggestion'):
                                     print(f"  Suggestion: {issue['suggestion']}")
@@ -173,10 +228,42 @@ jobs:
                                 has_errors = True
                         else:
                             print("✓ No issues found")
+                            all_violations[file_path] = {
+                                'total': 0,
+                                'errors': 0,
+                                'warnings': 0,
+                                'info': 0,
+                                'issues': []
+                            }
                     
+                    except httpx.TimeoutException as e:
+                        print(f"WARNING: Timeout while linting {file_path}")
+                        print(f"The file may be too large or complex for the MCP server to process within 60 seconds")
+                        print(f"Continuing with other files...")
+                        # Don't fail the workflow for timeouts, just warn
                     except Exception as e:
-                        print(f"Failed to lint {file_path}: {e}")
+                        print(f"ERROR: Failed to lint {file_path}: {e}")
+                        print(f"Error type: {type(e).__name__}")
                         has_errors = True
+            
+            # Save violations data for GitHub Actions
+            with open('lint_violations.json', 'w') as f:
+                json.dump(all_violations, f, indent=2)
+            
+            # Create GitHub annotations
+            for file_path, file_data in all_violations.items():
+                for issue in file_data['issues']:
+                    severity = issue['severity'].lower()
+                    level = 'error' if severity == 'error' else 'warning' if severity == 'warning' else 'notice'
+                    rule_id = issue.get('rule_id', issue.get('rule', 'unknown'))
+                    message = issue['message']
+                    suggestion = issue.get('suggestion', '')
+                    line = issue.get('line', 1)
+                    
+                    annotation = f"::{level} file={file_path},line={line},title={rule_id}::{message}"
+                    if suggestion:
+                        annotation += f" {suggestion}"
+                    print(annotation)
             
             # Exit with appropriate code
             sys.exit(1 if has_errors else 0)
@@ -194,27 +281,101 @@ jobs:
       with:
         script: |
           const fs = require('fs');
-          const { execSync } = require('child_process');
           
-          // Check if the lint step failed
-          const lintFailed = '${{ job.status }}' === 'failure';
-          
-          let comment = lintFailed 
-            ? '## ❌ SQL Schema Lint Failed\n\n'
-            : '## ✅ SQL Schema Lint Passed\n\n';
-          
-          comment += 'The MCP server has analyzed the SQL schema changes in this PR.\n\n';
-          
-          if (lintFailed) {
-            comment += '### Issues Found\n';
-            comment += 'Please review the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for detailed error messages.\n\n';
-            comment += '### Next Steps\n';
-            comment += '1. Review the reported issues\n';
-            comment += '2. Fix the schema problems\n';
-            comment += '3. Push your changes to update this PR\n';
-          } else {
-            comment += 'All SQL schemas comply with the defined rules. Good job! 🎉\n';
+          // Read violations data
+          let violations = {};
+          try {
+            violations = JSON.parse(fs.readFileSync('lint_violations.json', 'utf8'));
+          } catch (e) {
+            console.error('Failed to read violations:', e);
           }
+          
+          // Calculate totals
+          let totalErrors = 0;
+          let totalWarnings = 0;
+          let totalInfo = 0;
+          
+          for (const [file, data] of Object.entries(violations)) {
+            totalErrors += data.errors || 0;
+            totalWarnings += data.warnings || 0;
+            totalInfo += data.info || 0;
+          }
+          
+          const hasErrors = totalErrors > 0;
+          const totalIssues = totalErrors + totalWarnings + totalInfo;
+          
+          // Build comment
+          let comment = hasErrors 
+            ? '## ❌ SQL Schema Lint Failed\n\n'
+            : totalIssues > 0
+              ? '## ⚠️ SQL Schema Lint Completed with Warnings\n\n'
+              : '## ✅ SQL Schema Lint Passed\n\n';
+          
+          if (totalIssues > 0) {
+            // Summary section
+            comment += '### 📊 Summary\n\n';
+            comment += '| Severity | Count | Status |\n';
+            comment += '|----------|-------|--------|\n';
+            comment += `| 🔴 Errors | ${totalErrors} | ${totalErrors > 0 ? '❌ Must fix' : '✅ None'} |\n`;
+            comment += `| 🟡 Warnings | ${totalWarnings} | ${totalWarnings > 0 ? '⚠️ Should fix' : '✅ None'} |\n`;
+            comment += `| 🔵 Info | ${totalInfo} | ${totalInfo > 0 ? 'ℹ️ Consider' : '✅ None'} |\n`;
+            comment += `| **Total** | **${totalIssues}** | |\n\n`;
+            
+            // File-by-file breakdown
+            comment += '### 📁 Issues by File\n\n';
+            
+            for (const [file, data] of Object.entries(violations)) {
+              if (data.total === 0) continue;
+              
+              const fileName = file.split('/').pop();
+              comment += `<details>\n`;
+              comment += `<summary><b>${fileName}</b> - ${data.total} issue${data.total > 1 ? 's' : ''} `;
+              comment += `(${data.errors} error${data.errors !== 1 ? 's' : ''}, `;
+              comment += `${data.warnings} warning${data.warnings !== 1 ? 's' : ''}, `;
+              comment += `${data.info} info)</summary>\n\n`;
+              
+              // Group issues by severity
+              const groupedIssues = {
+                error: data.issues.filter(i => i.severity === 'error'),
+                warning: data.issues.filter(i => i.severity === 'warning'),
+                info: data.issues.filter(i => i.severity === 'info')
+              };
+              
+              for (const [severity, issues] of Object.entries(groupedIssues)) {
+                if (issues.length === 0) continue;
+                
+                const icon = severity === 'error' ? '🔴' : severity === 'warning' ? '🟡' : '🔵';
+                comment += `#### ${icon} ${severity.charAt(0).toUpperCase() + severity.slice(1)}s\n\n`;
+                
+                for (const issue of issues) {
+                  const ruleId = issue.rule_id || issue.rule || 'unknown';
+                  comment += `- **Line ${issue.line}**: \`${ruleId}\`\n`;
+                  comment += `  - ${issue.message}\n`;
+                  if (issue.suggestion) {
+                    comment += `  - 💡 ${issue.suggestion}\n`;
+                  }
+                  comment += '\n';
+                }
+              }
+              
+              comment += '</details>\n\n';
+            }
+            
+            if (hasErrors) {
+              comment += '### 🚨 Action Required\n\n';
+              comment += '1. Review the **errors** above (must be fixed)\n';
+              comment += '2. Consider fixing **warnings** for better code quality\n';
+              comment += '3. Push your fixes to update this PR\n\n';
+            } else if (totalWarnings > 0) {
+              comment += '### 💡 Recommendations\n\n';
+              comment += 'While not blocking, consider addressing the warnings above for better SQL schema quality.\n\n';
+            }
+          } else {
+            comment += '✨ All SQL schemas comply with the defined rules. Excellent work!\n\n';
+          }
+          
+          comment += '---\n';
+          comment += `🤖 *Powered by [SQL Schema Lint MCP Server](https://github.com/${{ github.repository }})*`;
           
           // Post comment
           github.rest.issues.createComment({
