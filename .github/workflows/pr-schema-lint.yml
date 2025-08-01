@@ -1,4 +1,4 @@
-name: SQL Schema Lint via MCP (Python)
+name: SQL Schema Lint
 
 on:
   pull_request:
