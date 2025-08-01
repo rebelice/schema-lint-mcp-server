@@ -72,9 +72,12 @@ jobs:
             if params:
                 payload['params'] = params
             
-            with httpx.Client() as client:
+            # Ensure URL doesn't have trailing slash
+            base_url = MCP_SERVER_URL.rstrip('/')
+            
+            with httpx.Client(follow_redirects=True) as client:
                 response = client.post(
-                    f'{MCP_SERVER_URL}/message',
+                    f'{base_url}/message',
                     json=payload,
                     headers=headers,
                     timeout=30.0
@@ -84,6 +87,10 @@ jobs:
 
         def main():
             has_errors = False
+            
+            # Debug: Print server URL
+            print(f"MCP Server URL: {MCP_SERVER_URL}")
+            print(f"Using endpoint: {MCP_SERVER_URL.rstrip('/')}/message")
             
             # Initialize MCP session
             print("Initializing MCP session...")
