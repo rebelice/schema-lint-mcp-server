@@ -62,3 +62,48 @@ SELECT p.*, c.name as category_name
 FROM products p
 LEFT JOIN categories c ON p.category_id = c.id
 WHERE p.stock_quantity > 0;
+
+-- Additional tables with more violations
+
+-- Table with poor indexing strategy
+CREATE TABLE user_activity_log (
+    log_id SERIAL PRIMARY KEY,
+    user_id INTEGER,  -- No foreign key constraint
+    action_type VARCHAR,  -- No length specified
+    action_timestamp TIMESTAMP,
+    ip_address VARCHAR(15),  -- Too short for IPv6
+    user_agent TEXT,
+    response_time FLOAT  -- Using FLOAT for time measurements
+);
+
+-- Table with denormalized data
+CREATE TABLE order_summary (
+    summary_id SERIAL PRIMARY KEY,
+    order_id INTEGER,
+    user_name VARCHAR(200),  -- Denormalized from users table
+    user_email VARCHAR(255),  -- Denormalized from users table
+    product_names TEXT,  -- Storing multiple values in single column
+    total_items TEXT,  -- Should be INTEGER
+    order_date DATE,  -- Should be TIMESTAMP
+    delivery_status VARCHAR(50)
+);
+
+-- Table with missing constraints
+CREATE TABLE inventory_movements (
+    movement_id SERIAL,  -- PRIMARY KEY missing
+    product_id INTEGER,
+    quantity INTEGER,  -- No CHECK constraint for positive values
+    movement_type VARCHAR(20),  -- No CHECK constraint for valid types
+    movement_date TIMESTAMP,
+    notes TEXT
+);
+
+-- Table with composite key issues
+CREATE TABLE user_settings (
+    user_id INTEGER,
+    setting_name VARCHAR(100),
+    setting_value TEXT,
+    created_at TIMESTAMP,
+    -- Missing PRIMARY KEY definition for composite key
+    updated_at TIMESTAMP
+);
