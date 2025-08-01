@@ -1,0 +1,54 @@
+server:
+  name: "sql-schema-lint"
+  version: "1.0.0"
+  description: "AI-powered MCP server for SQL schema linting"
+
+ai:
+  default_provider: "gemini"
+  providers:
+    gemini:
+      api_key: "${GOOGLE_API_KEY}"
+      model: "gemini-2.0-flash-exp"
+      max_tokens: 8192
+    claude:
+      api_key: "${ANTHROPIC_API_KEY}"
+      model: "claude-3-5-sonnet-20241022"
+      max_tokens: 4096
+    openai:
+      api_key: "${OPENAI_API_KEY}"
+      model: "gpt-4-turbo-preview"
+      max_tokens: 4096
+  
+  cache:
+    enabled: true
+    ttl_seconds: 3600
+    
+  rate_limiting:
+    max_requests_per_minute: 30
+    retry_attempts: 3
+    retry_delay_ms: 1000
+
+defaults:
+  output_format: "json"
+  severity_threshold: "warning"
+  dialect: "postgres"
+  provider: "gemini"
+  
+parsers:
+  sql:
+    case_sensitive: false
+    allow_quoted_identifiers: true
+    max_identifier_length: 63
+  
+  postgres:
+    extensions: ["uuid-ossp", "postgis"]
+    
+  mysql:
+    sql_mode: "TRADITIONAL"
+    
+  sqlite:
+    foreign_keys: true
+    
+rules:
+  batch_size: 5
+  timeout_seconds: 30
