@@ -11,6 +11,11 @@ on:
 env:
   MCP_SERVER_URL: ${{ secrets.MCP_SERVER_URL || 'https://schema-lint-mcp.example.com' }}
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
 jobs:
   lint-schema-mcp:
     runs-on: ubuntu-latest
