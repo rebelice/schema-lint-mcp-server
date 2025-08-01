@@ -1,4 +1,4 @@
-name: SQL Schema Lint via MCP (Python)
+name: SQL Schema Lint
 
 on:
   pull_request:
@@ -10,6 +10,11 @@ on:
 
 env:
   MCP_SERVER_URL: ${{ secrets.MCP_SERVER_URL || 'http://localhost:8070' }}
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
 
 jobs:
   lint-schema-mcp:
@@ -72,18 +77,39 @@ jobs:
             if params:
                 payload['params'] = params
             
-            with httpx.Client() as client:
-                response = client.post(
-                    f'{MCP_SERVER_URL}/message',
-                    json=payload,
-                    headers=headers,
-                    timeout=30.0
-                )
-                response.raise_for_status()
-                return response.json()
+            # Ensure URL doesn't have trailing slash
+            base_url = MCP_SERVER_URL.rstrip('/')
+            
+            try:
+                with httpx.Client(follow_redirects=True) as client:
+                    response = client.post(
+                        f'{base_url}/message',
+                        json=payload,
+                        headers=headers,
+                        timeout=30.0
+                    )
+                    response.raise_for_status()
+                    return response.json()
+            except httpx.ConnectError as e:
+                print(f"ERROR: Cannot connect to MCP server at {base_url}")
+                print(f"Connection error: {e}")
+                print("\nMake sure:")
+                print("1. MCP_SERVER_URL secret is configured correctly")
+                print("2. The MCP server is running and accessible")
+                print("3. Any required authentication is configured")
+                sys.exit(1)
+            except httpx.HTTPStatusError as e:
+                print(f"ERROR: HTTP error from MCP server")
+                print(f"Status: {e.response.status_code}")
+                print(f"Response: {e.response.text}")
+                sys.exit(1)
 
         def main():
             has_errors = False
+            
+            # Debug: Print server URL
+            print(f"MCP Server URL: {MCP_SERVER_URL}")
+            print(f"Using endpoint: {MCP_SERVER_URL.rstrip('/')}/message")
             
             # Initialize MCP session
             print("Initializing MCP session...")

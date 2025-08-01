@@ -2,13 +2,10 @@
 
 This directory contains GitHub Actions workflows for the SQL Schema Lint MCP Server.
 
-## Workflows
+## Workflow
 
-### 1. PR Schema Lint via MCP (`pr-schema-lint-mcp.yml`)
-This workflow connects to an external MCP server to lint SQL schemas. It uses Node.js to communicate with the MCP server via HTTP/JSON-RPC.
-
-### 2. PR Schema Lint via MCP Python (`pr-schema-lint-mcp-python.yml`)
-Alternative workflow using Python and the MCP SDK to connect to an external MCP server.
+### PR Schema Lint (`pr-schema-lint.yml`)
+This workflow connects to an external MCP server to lint SQL schemas using Python. It automatically runs when a Pull Request is opened, synchronized, or reopened that contains changes to SQL files.
 
 ## Setup
 
