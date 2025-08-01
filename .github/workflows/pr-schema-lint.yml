@@ -196,13 +196,17 @@ jobs:
                             print(f"Failed to parse result as JSON: {result_text}")
                             result = {}
                         
-                        if result.get('totalIssues', 0) > 0:
-                            error_count = result.get('errorCount', 0)
-                            print(f"Found {result['totalIssues']} issues (Errors: {error_count})")
+                        # Check both possible field names for total issues
+                        total_issues = result.get('totalIssues', result.get('total_issues', 0))
+                        
+                        if total_issues > 0:
+                            error_count = result.get('errorCount', result.get('errors', 0))
+                            print(f"Found {total_issues} issues (Errors: {error_count})")
                             
                             for issue in result.get('issues', []):
                                 severity = issue['severity'].upper()
-                                print(f"\n[{severity}] Line {issue['line']}: {issue['rule']}")
+                                rule_id = issue.get('rule_id', issue.get('rule', 'unknown'))
+                                print(f"\n[{severity}] Line {issue['line']}: {rule_id}")
                                 print(f"  {issue['message']}")
                                 if issue.get('suggestion'):
                                     print(f"  Suggestion: {issue['suggestion']}")
