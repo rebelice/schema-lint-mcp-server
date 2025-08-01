@@ -127,6 +127,11 @@ jobs:
             })
             print(f"Session initialized: {init_response}")
             
+            # List available tools
+            print("\nListing available tools...")
+            tools_response = call_mcp('tools/list', {})
+            print(f"Available tools: {json.dumps(tools_response, indent=2)}")
+            
             # Read rules content
             rules_path = Path('examples/rules/sql-schema-rules.md')
             if not rules_path.exists():
@@ -144,6 +149,10 @@ jobs:
                         # Read schema content
                         schema_content = Path(file_path).read_text()
                         
+                        # Debug: Show file sizes
+                        print(f"Schema size: {len(schema_content)} characters")
+                        print(f"Rules size: {len(rules_content)} characters")
+                        
                         # Call lint_schema tool
                         lint_response = call_mcp('tools/call', {
                             'name': 'lint_schema',
@@ -153,6 +162,9 @@ jobs:
                                 'output_format': 'json'
                             }
                         }, id=2)
+                        
+                        # Debug: Show raw response
+                        print(f"Raw MCP response: {json.dumps(lint_response, indent=2)}")
                         
                         if 'error' in lint_response:
                             print(f"Error from MCP server: {lint_response['error']}")
@@ -179,6 +191,7 @@ jobs:
                         
                         try:
                             result = json.loads(result_text)
+                            print(f"Parsed result: {json.dumps(result, indent=2)}")
                         except json.JSONDecodeError:
                             print(f"Failed to parse result as JSON: {result_text}")
                             result = {}
